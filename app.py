@@ -5,133 +5,149 @@ import pickle
 import shap
 import matplotlib.pyplot as plt
 
-# ======================================================
-# PAGE CONFIG
-# ======================================================
+# =====================================================
+# 1. PAGE CONFIGURATION
+# =====================================================
 st.set_page_config(
-    page_title="Income Prediction App",
-    layout="centered"
+    page_title="Income AI Predictor",
+    layout="wide"
 )
 
-st.title("💰 Income Prediction System")
-
-# ======================================================
-# LOAD MODEL
-# ======================================================
+# =====================================================
+# 2. LOAD RESOURCES
+# =====================================================
 @st.cache_resource
-def load_model():
+def load_resources():
     with open("model_income_xgboost.pkl", "rb") as f:
-        return pickle.load(f)
+        model = pickle.load(f)
+    explainer = shap.TreeExplainer(model)
+    return model, explainer
 
-model = load_model()
-feature_names = model.get_booster().feature_names
+model, explainer = load_resources()
 
-# ======================================================
-# MAPPING PENDIDIKAN
-# ======================================================
-education_map = {
-    "Preschool": 1, "1st-4th": 2, "5th-6th": 3, "7th-8th": 4,
-    "9th": 5, "10th": 6, "11th": 7, "12th": 8, "HS-grad": 9,
-    "Some-college": 10, "Assoc-voc": 11, "Assoc-acdm": 12,
-    "Bachelors": 13, "Masters": 14, "Prof-school": 15, "Doctorate": 16
+# =====================================================
+# 3. MAPPINGS (Indonesia Translation)
+# =====================================================
+EDUCATION_MAP = {
+    "Tidak Sekolah": 1, "SD": 3, "SMP": 5, "SMA": 9, "Kuliah/Diploma": 10,
+    "Sarjana (S1)": 13, "Magister (S2)": 14, "Pendidikan Profesi": 15, "Doktor (S3)": 16
 }
 
-# ======================================================
-# INPUT USER
-# ======================================================
-st.subheader("📋 Profil Individu")
+OCCUPATION_MAP = {
+    "Manajerial / Eksekutif": "Exec-managerial", "Profesional / Spesialis": "Prof-specialty",
+    "Teknisi / IT Support": "Tech-support", "Penjualan": "Sales", "Layanan Umum": "Other-service",
+    "Pekerja Kasar": "Handlers-cleaners", "Lainnya": "Unknown"
+}
 
-# Baris 1: Pekerjaan & Status
-col_a, col_b = st.columns(2)
-with col_a:
-    workclass = st.selectbox("Workclass", ["Private", "Self-emp-not-inc", "Self-emp-inc", "Federal-gov", "Local-gov", "State-gov"])
-    marital_status = st.selectbox("Status Pernikahan", ["Married-civ-spouse", "Never-married", "Divorced", "Separated", "Widowed", "Married-spouse-absent"])
-with col_b:
-    occupation = st.selectbox("Occupation", ["Exec-managerial", "Prof-specialty", "Sales", "Tech-support", "Craft-repair", "Adm-clerical", "Other-service"])
-    relationship = st.selectbox("Relationship", ["Husband", "Wife", "Own-child", "Not-in-family", "Unmarried"])
+MARITAL_MAP = {"Belum Menikah": "Never-married", "Menikah": "Married-civ-spouse", "Cerai/Pisah": "Divorced"}
+RELATIONSHIP_MAP = {"Suami": "Husband", "Istri": "Wife", "Anak": "Own-child", "Lainnya": "Unmarried"}
 
-# Baris 2: Pendidikan (Dropdown Baru) & Gender
-col_c, col_d = st.columns(2)
-with col_c:
-    education_label = st.selectbox("Pendidikan Terakhir", list(education_map.keys()), index=12) # Default Bachelors
-    education_num = education_map[education_label] # Konversi otomatis ke angka
-with col_d:
+# =====================================================
+# 4. INPUT PROFIL (SEMUA TERBUKA / STATIS)
+# =====================================================
+st.title("💰 Income Prediction & Business Insight")
+st.subheader("📋 Input Profil Individu")
+
+# Membagi input ke dalam 3 kolom agar semua terlihat tanpa scroll jauh
+col_in1, col_in2, col_in3 = st.columns(3)
+
+with col_in1:
+    age = st.slider("Usia", 17, 90, 35)
+    education_label = st.selectbox("Pendidikan Terakhir", list(EDUCATION_MAP.keys()), index=5)
     gender = st.radio("Jenis Kelamin", ["Male", "Female"], horizontal=True)
 
-# Fitur numerik lainnya dalam expander
-with st.expander("Fitur Tambahan (Umur, Jam Kerja, & Capital)"):
-    age = st.slider("Usia", 17, 90, 30)
-    hours_per_week = st.number_input("Jam Kerja per Minggu", 1, 100, 40)
-    capital_gain = st.number_input("Capital Gain", 0, 100000, 0)
-    capital_loss = st.number_input("Capital Loss", 0, 100000, 0)
+with col_in2:
+    occupation_label = st.selectbox("Pekerjaan", list(OCCUPATION_MAP.keys()))
+    marital_label = st.selectbox("Status Pernikahan", list(MARITAL_MAP.keys()))
+    relationship_label = st.selectbox("Hubungan Keluarga", list(RELATIONSHIP_MAP.keys()))
+
+with col_in3:
+    hours = st.number_input("Jam Kerja per Minggu", 1, 100, 40)
+    # Teks tambahan untuk rata-rata harian
+    avg_daily = hours / 5
+    st.markdown(f"**⏱️ Estimasi:** {avg_daily:.1f} jam / hari (5 hari kerja)")
+    
+    capital_gain = st.number_input("Capital Gain ($)", 0, 100000, 0)
+    capital_loss = st.number_input("Capital Loss ($)", 0, 100000, 0)
 
 st.divider()
 
-# ======================================================
-# PREDICTION LOGIC
-# ======================================================
-if st.button("📊 Prediksi Pendapatan"):
-    try:
-        # Menyiapkan DataFrame Input
-        input_df = pd.DataFrame(data=np.zeros((1, len(feature_names))), columns=feature_names)
-        
-        # Isi Fitur Numerik
-        input_df.at[0, "Age"] = age
-        input_df.at[0, "EducationNum"] = education_num
-        input_df.at[0, "Hours per Week"] = hours_per_week
-        input_df.at[0, "Capital Gain"] = capital_gain
-        input_df.at[0, "capital loss"] = capital_loss
+# =====================================================
+# 5. PREDICTION LOGIC
+# =====================================================
+def build_input():
+    feature_names = model.get_booster().feature_names
+    X = pd.DataFrame(0, index=[0], columns=feature_names)
+    X["Age"] = age
+    X["EducationNum"] = EDUCATION_MAP[education_label]
+    X["Hours per Week"] = hours
+    X["Capital Gain"] = capital_gain
+    X["capital loss"] = capital_loss
+    
+    # Aktivasi One-Hot
+    def act(prefix, val):
+        col = f"{prefix}_{val}"
+        if col in X.columns: X[col] = 1
 
-        # Isi Fitur Kategorikal (One-Hot)
-        def activate(col_name):
-            if col_name in input_df.columns: input_df.at[0, col_name] = 1
+    act("Occupation", OCCUPATION_MAP[occupation_label])
+    act("Marital Status", MARITAL_MAP[marital_label])
+    act("Relationship", RELATIONSHIP_MAP[relationship_label])
+    if gender == "Male": X["Gender_Male"] = 1
+    return X
 
-        activate(f"Workclass_{workclass}")
-        activate(f"Marital Status_{marital_status}")
-        activate(f"Occupation_{occupation}")
-        activate(f"Relationship_{relationship}")
-        activate(f"Gender_{gender}")
+X_input = build_input()
 
-        # Prediksi
-        prediction = model.predict(input_df)[0]
-        probability = model.predict_proba(input_df)[0][1]
+if st.button("🚀 Jalankan Analisis Prediksi", use_container_width=True):
+    prob = model.predict_proba(X_input)[0][1]
+    pred = 1 if prob > 0.5 else 0
 
-        # --- TAMPILAN HASIL PREDIKSI ---
-        st.subheader("📉 Hasil Prediksi")
-        
-        if prediction == 1:
-            st.success(f"**Prediksi: Pendapatan > $50K per tahun**")
-            prob_val = probability * 100
+    # --- BAGIAN HASIL & GRAFIK ---
+    col_res1, col_res2 = st.columns([1, 1.5])
+
+    with col_res1:
+        st.subheader("🎯 Hasil Prediksi")
+        if pred == 1:
+            st.success("### PENDAPATAN TINGGI (> $50K)")
             label = "Tinggi"
         else:
-            st.error(f"**Prediksi: Pendapatan ≤ $50K per tahun**")
-            prob_val = (1 - probability) * 100
+            st.error("### PENDAPATAN RENDAH (≤ $50K)")
             label = "Rendah"
+            prob = 1 - prob
+        
+        st.metric(f"Confidence (Prob. {label})", f"{prob*100:.2f}%")
 
-        st.metric(f"Probabilitas Pendapatan {label}", f"{prob_val:.2f}%")
-
-        # --- SHAP VALUE VISUALIZATION ---
-        st.divider()
-        st.subheader("🔎 Penjelasan Prediksi (SHAP Value)")
-        explainer = shap.TreeExplainer(model)
-        shap_values = explainer.shap_values(input_df)
-
-        fig, ax = plt.subplots()
-        shap.bar_plot(shap_values[0], max_display=10, feature_names=feature_names, show=False)
+    with col_res2:
+        st.subheader("🔎 Penjelasan Model (SHAP)")
+        shap_values = explainer.shap_values(X_input)[0]
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Plotting manual untuk kontrol warna lebih baik
+        shap_df = pd.DataFrame({"Fitur": X_input.columns, "Impact": shap_values})
+        shap_df = shap_df.sort_values("Impact", key=abs).tail(10)
+        colors = ['#ff4b4b' if x < 0 else '#00cc96' for x in shap_df['Impact']]
+        
+        ax.barh(shap_df['Fitur'], shap_df['Impact'], color=colors)
+        ax.set_title("10 Faktor Utama Penentu Prediksi")
         st.pyplot(fig)
 
-        # --- TAFSIR DESKRIPTIF & SARAN ---
-        st.divider()
-        st.subheader("📝 Tafsir & Saran")
-        
-        if prediction == 0:
-            st.write(f"### Mengapa Hasilnya Pendapatan Rendah?")
-            st.write(f"Berdasarkan data, tingkat pendidikan **{education_label}** dan jam kerja **{hours_per_week} jam** menjadi faktor penahan.")
-            st.info("💡 **Saran:** Cobalah tingkatkan skill spesifik atau sertifikasi untuk menaikkan posisi tawar Anda ke level 'Masters' atau 'Prof-school'.")
+    # --- TAFSIR ANALISIS DESKRIPTIF BISNIS ---
+    st.divider()
+    st.subheader("📝 Tafsir Analisis & Rekomendasi Bisnis")
+    
+    col_bis1, col_bis2 = st.columns(2)
+    
+    with col_bis1:
+        st.markdown("#### 🧐 Mengapa Prediksi Demikian?")
+        if pred == 0:
+            st.write(f"Model mendeteksi bahwa tingkat pendidikan **{education_label}** dikombinasikan dengan jenis pekerjaan **{occupation_label}** secara historis memiliki batas atas pendapatan di bawah $50K.")
+            st.write(f"Meskipun bekerja **{avg_daily:.1f} jam/hari**, faktor kualifikasi (EducationNum) memberikan dampak negatif yang lebih besar pada probabilitas.")
         else:
-            st.write(f"### Mengapa Hasilnya Pendapatan Tinggi?")
-            st.write(f"Kombinasi pendidikan **{education_label}** dan peran **{occupation}** sangat kuat mendorong pendapatan Anda ke atas.")
-            st.info("💡 **Saran:** Pertahankan performa dan kelola Capital Gain Anda agar aset terus tumbuh.")
+            st.write(f"Kombinasi usia matang (**{age} tahun**) dan sektor pekerjaan **{occupation_label}** merupakan pendorong utama.")
+            st.write(f"Status **{marital_label}** juga terdeteksi oleh model sebagai faktor stabilitas yang berkorelasi dengan pendapatan tinggi di dataset ini.")
 
-    except Exception as e:
-        st.error(f"Error: {e}")
+    with col_bis2:
+        st.markdown("#### 🚀 Strategi Tindak Lanjut")
+        if pred == 0:
+            st.warning("**Rekomendasi:** Fokus pada peningkatan spesialisasi. Data menunjukkan transisi ke pendidikan 'Sarjana' atau 'Magister' akan menggeser dampak fitur merah menjadi hijau secara signifikan.")
+        else:
+            st.info("**Rekomendasi:** Pertahankan posisi di industri saat ini. Manfaatkan 'Capital Gain' untuk diversifikasi aset karena profil Anda berada pada segmen profitabilitas tinggi.")
